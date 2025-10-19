@@ -24,6 +24,7 @@ export default defineConfig(({ mode }) => {
     conditions: ['browser', 'module', 'import', 'default'],
     mainFields: ['browser', 'module', 'main']
   },
+
   server: {
     // Restrict CORS to only allow localhost
     cors: {
@@ -67,6 +68,7 @@ export default defineConfig(({ mode }) => {
   define: {
     'import.meta.env.DEV': isDev,
     'import.meta.env.VITE_POSTHOG_API_KEY': JSON.stringify(env.VITE_POSTHOG_API_KEY || process.env.VITE_POSTHOG_API_KEY || ''),
+    global: 'globalThis',
   },
 
   envDir: '../',

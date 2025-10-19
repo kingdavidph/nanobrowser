@@ -66,10 +66,58 @@ analyticsSettingsStore.subscribe(() => {
 });
 
 // Listen for simple messages (e.g., from options page)
-chrome.runtime.onMessage.addListener(() => {
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.type === 'fetch_bedrock_models') {
+    // Handle Bedrock model fetching
+    (async () => {
+      try {
+        const { fetchBedrockModels } = await import('./agent/helper');
+        const models = await fetchBedrockModels(
+          {
+            accessKeyId: message.credentials.accessKeyId,
+            secretAccessKey: message.credentials.secretAccessKey,
+          },
+          message.region,
+          message.filters,
+        );
+        sendResponse({ success: true, models });
+      } catch (error) {
+        console.error('Failed to fetch Bedrock models:', error);
+        sendResponse({
+          success: false,
+          error: error instanceof Error ? error.message : 'Unknown error',
+        });
+      }
+    })();
+    return true; // Indicates we will send a response asynchronously
+  }
+
+  if (message.type === 'generate_bedrock_provisioning') {
+    // Handle Bedrock provisioning file generation
+    (async () => {
+      try {
+        const { generateBedrockProvisioningFiles } = await import('./agent/helper');
+        const files = await generateBedrockProvisioningFiles(
+          {
+            accessKeyId: message.credentials.accessKeyId,
+            secretAccessKey: message.credentials.secretAccessKey,
+          },
+          message.region,
+        );
+        sendResponse({ success: true, files });
+      } catch (error) {
+        console.error('Failed to generate provisioning files:', error);
+        sendResponse({
+          success: false,
+          error: error instanceof Error ? error.message : 'Unknown error',
+        });
+      }
+    })();
+    return true; // Indicates we will send a response asynchronously
+  }
+
   // Handle other message types if needed in the future
-  // Return false if response is not sent asynchronously
-  // return false;
+  return false;
 });
 
 // Setup connection listener for long-lived connections (e.g., side panel)

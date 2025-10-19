@@ -19,6 +19,7 @@ export enum ProviderTypeEnum {
   Groq = 'groq',
   Cerebras = 'cerebras',
   Llama = 'llama',
+  Bedrock = 'bedrock',
   CustomOpenAI = 'custom_openai',
 }
 
@@ -44,6 +45,17 @@ export const llmProviderModelNames = {
     'Llama-3.3-8B-Instruct',
     'Llama-4-Maverick-17B-128E-Instruct-FP8',
     'Llama-4-Scout-17B-16E-Instruct-FP8',
+  ],
+  [ProviderTypeEnum.Bedrock]: [
+    // Models will be populated dynamically via API call
+    // Fallback models in case API call fails:
+    'us.anthropic.claude-3-5-sonnet-20241022-v2:0',
+    'global.anthropic.claude-3-5-sonnet-20241022-v2:0',
+    'anthropic.claude-3-5-sonnet-20241022-v2:0',
+    'anthropic.claude-3-5-haiku-20241022-v1:0',
+    'anthropic.claude-3-opus-20240229-v1:0',
+    'anthropic.claude-3-sonnet-20240229-v1:0',
+    'anthropic.claude-3-haiku-20240307-v1:0',
   ],
   // Custom OpenAI providers don't have predefined models as they are user-defined
 };
@@ -148,6 +160,16 @@ export const llmProviderParameters = {
     [AgentNameEnum.Navigator]: {
       temperature: 0.3,
       topP: 0.85,
+    },
+  },
+  [ProviderTypeEnum.Bedrock]: {
+    [AgentNameEnum.Planner]: {
+      temperature: 0.3,
+      topP: 0.6,
+    },
+    [AgentNameEnum.Navigator]: {
+      temperature: 0.2,
+      topP: 0.5,
     },
   },
 };

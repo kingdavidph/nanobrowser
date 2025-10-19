@@ -67,6 +67,7 @@ export function getProviderTypeByProviderId(providerId: string): ProviderTypeEnu
     case ProviderTypeEnum.OpenRouter:
     case ProviderTypeEnum.Groq:
     case ProviderTypeEnum.Cerebras:
+    case ProviderTypeEnum.Bedrock:
       return providerId;
     default:
       return ProviderTypeEnum.CustomOpenAI;
@@ -99,6 +100,8 @@ export function getDefaultDisplayNameFromProviderId(providerId: string): string 
       return 'Cerebras';
     case ProviderTypeEnum.Llama:
       return 'Llama';
+    case ProviderTypeEnum.Bedrock:
+      return 'AWS Bedrock';
     default:
       return providerId; // Use the provider id as display name for custom providers by default
   }
@@ -116,6 +119,7 @@ export function getDefaultProviderConfig(providerId: string): ProviderConfig {
     case ProviderTypeEnum.Groq: // Groq uses modelNames
     case ProviderTypeEnum.Cerebras: // Cerebras uses modelNames
     case ProviderTypeEnum.Llama: // Llama uses modelNames
+    case ProviderTypeEnum.Bedrock: // Bedrock uses modelNames
       return {
         apiKey: '',
         name: getDefaultDisplayNameFromProviderId(providerId),
@@ -125,7 +129,9 @@ export function getDefaultProviderConfig(providerId: string): ProviderConfig {
             ? 'https://openrouter.ai/api/v1'
             : providerId === ProviderTypeEnum.Llama
               ? 'https://api.llama.com/v1'
-              : undefined,
+              : providerId === ProviderTypeEnum.Bedrock
+                ? '' // Will be used for AWS Secret Access Key
+                : undefined,
         modelNames: [...(llmProviderModelNames[providerId] || [])],
         createdAt: Date.now(),
       };
@@ -247,6 +253,13 @@ export const llmProviderStore: LLMProviderStorage = {
       }
       if (!config.apiKey?.trim()) {
         throw new Error('API Key is required for Azure OpenAI');
+      }
+    } else if (providerType === ProviderTypeEnum.Bedrock) {
+      if (!config.apiKey?.trim()) {
+        throw new Error('AWS Access Key ID is required for Bedrock');
+      }
+      if (!config.baseUrl?.trim()) {
+        throw new Error('AWS Secret Access Key is required for Bedrock (stored in baseUrl field)');
       }
     } else if (providerType !== ProviderTypeEnum.CustomOpenAI && providerType !== ProviderTypeEnum.Ollama) {
       if (!config.apiKey?.trim()) {

@@ -83,6 +83,20 @@ export const ModelSettings = ({ isDarkMode = false }: ModelSettingsProps) => {
   const [nameErrors, setNameErrors] = useState<Record<string, string>>({});
   // Add state for tracking API key visibility
   const [visibleApiKeys, setVisibleApiKeys] = useState<Record<string, boolean>>({});
+  const [loadingBedrockModels, setLoadingBedrockModels] = useState<Record<string, boolean>>({});
+  const [generatingProvisioningFiles, setGeneratingProvisioningFiles] = useState<Record<string, boolean>>({});
+  const [bedrockRegions, setBedrockRegions] = useState<Record<string, string>>({});
+  const [bedrockFilters, setBedrockFilters] = useState<
+    Record<
+      string,
+      {
+        provider?: string;
+        outputModality?: string;
+        inferenceType?: string;
+        customizationType?: string;
+      }
+    >
+  >({});
   // Create a non-async wrapper for use in render functions
   const [availableModels, setAvailableModels] = useState<
     Array<{ provider: string; providerName: string; model: string }>
@@ -275,6 +289,117 @@ export const ModelSettings = ({ isDarkMode = false }: ModelSettingsProps) => {
     }));
   };
 
+  // Function to generate Bedrock provisioning files
+  const generateBedrockProvisioning = async (providerId: string) => {
+    const providerConfig = providers[providerId];
+    if (!providerConfig?.apiKey?.trim() || !providerConfig?.baseUrl?.trim()) {
+      alert('Please enter both AWS Access Key ID and Secret Access Key first.');
+      return;
+    }
+
+    const selectedRegion = bedrockRegions[providerId] || 'us-west-2';
+    setGeneratingProvisioningFiles(prev => ({ ...prev, [providerId]: true }));
+
+    try {
+      const response = await chrome.runtime.sendMessage({
+        type: 'generate_bedrock_provisioning',
+        credentials: {
+          accessKeyId: providerConfig.apiKey,
+          secretAccessKey: providerConfig.baseUrl, // Using baseUrl field for secret key
+        },
+        region: selectedRegion,
+      });
+
+      if (response.success) {
+        const files = response.files;
+        const fileCount = Object.keys(files).length;
+
+        if (fileCount === 0) {
+          alert('✅ All models already have access! No provisioning needed.');
+          return;
+        }
+
+        // Create and download provisioning files
+        for (const [filename, content] of Object.entries(files)) {
+          const blob = new Blob([content as string], { type: 'text/plain' });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = filename;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+        }
+
+        alert(
+          `📁 Generated ${fileCount} provisioning files!\n\n` +
+            `Files downloaded:\n${Object.keys(files)
+              .map(f => `• ${f}`)
+              .join('\n')}\n\n` +
+            `Next steps:\n` +
+            `1. Run the shell script (Linux/Mac) or PowerShell script (Windows)\n` +
+            `2. Wait for AWS approval (1-24 hours)\n` +
+            `3. Refresh models in Nanobrowser`,
+        );
+      } else {
+        console.error('Failed to generate provisioning files:', response.error);
+        alert(`Failed to generate provisioning files: ${response.error}`);
+      }
+    } catch (error) {
+      console.error('Error generating provisioning files:', error);
+      alert('Failed to generate provisioning files. Please check your credentials and try again.');
+    } finally {
+      setGeneratingProvisioningFiles(prev => ({ ...prev, [providerId]: false }));
+    }
+  };
+
+  // Function to fetch Bedrock models dynamically
+  const fetchBedrockModels = async (providerId: string) => {
+    const providerConfig = providers[providerId];
+    if (!providerConfig?.apiKey?.trim() || !providerConfig?.baseUrl?.trim()) {
+      alert('Please enter both Access Key and Secret Key before fetching models.');
+      return;
+    }
+
+    const selectedRegion = bedrockRegions[providerId] || 'multi-region';
+    const filters = bedrockFilters[providerId] || {};
+    setLoadingBedrockModels(prev => ({ ...prev, [providerId]: true }));
+
+    try {
+      const response = await chrome.runtime.sendMessage({
+        type: 'fetch_bedrock_models',
+        credentials: {
+          accessKeyId: providerConfig.apiKey,
+          secretAccessKey: providerConfig.baseUrl,
+        },
+        region: selectedRegion,
+        filters: filters,
+      });
+
+      if (response.success) {
+        // Update the provider with the fetched models
+        setProviders(prev => ({
+          ...prev,
+          [providerId]: {
+            ...prev[providerId],
+            modelNames: response.models,
+          },
+        }));
+        setModifiedProviders(prev => new Set(prev).add(providerId));
+        console.log(`Fetched ${response.models.length} Bedrock models for ${providerId} from ${selectedRegion}`);
+      } else {
+        console.error('Failed to fetch Bedrock models:', response.error);
+        alert(`Failed to fetch models: ${response.error}`);
+      }
+    } catch (error) {
+      console.error('Error fetching Bedrock models:', error);
+      alert('Failed to fetch models. Please check your credentials and try again.');
+    } finally {
+      setLoadingBedrockModels(prev => ({ ...prev, [providerId]: false }));
+    }
+  };
+
   // Add a toggle handler for API key visibility
   const toggleApiKeyVisibility = (provider: string) => {
     setVisibleApiKeys(prev => ({
@@ -412,6 +537,9 @@ export const ModelSettings = ({ isDarkMode = false }: ModelSettingsProps) => {
     } else if (providerType === ProviderTypeEnum.Llama) {
       // Llama needs API Key and Base URL
       hasInput = Boolean(config?.apiKey?.trim()) && Boolean(config?.baseUrl?.trim());
+    } else if (providerType === ProviderTypeEnum.Bedrock) {
+      // Bedrock needs Access Key ID and Secret Access Key
+      hasInput = Boolean(config?.apiKey?.trim()) && Boolean(config?.baseUrl?.trim());
     } else {
       // Other built-in providers just need API Key
       hasInput = Boolean(config?.apiKey?.trim());
@@ -443,7 +571,8 @@ export const ModelSettings = ({ isDarkMode = false }: ModelSettingsProps) => {
           providers[provider].type === ProviderTypeEnum.Ollama ||
           providers[provider].type === ProviderTypeEnum.AzureOpenAI ||
           providers[provider].type === ProviderTypeEnum.OpenRouter ||
-          providers[provider].type === ProviderTypeEnum.Llama) &&
+          providers[provider].type === ProviderTypeEnum.Llama ||
+          providers[provider].type === ProviderTypeEnum.Bedrock) &&
         (!providers[provider].baseUrl || !providers[provider].baseUrl.trim())
       ) {
         alert(t('options_models_providers_errors_baseUrlRequired', getDefaultDisplayNameFromProviderId(provider)));
@@ -1228,7 +1357,10 @@ export const ModelSettings = ({ isDarkMode = false }: ModelSettingsProps) => {
                       <label
                         htmlFor={`${providerId}-api-key`}
                         className={`w-20 text-sm font-medium ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
-                        {t('options_models_providers_apiKey')}
+                        {/* Custom label for Bedrock */}
+                        {providerConfig.type === ProviderTypeEnum.Bedrock
+                          ? 'Access Key'
+                          : t('options_models_providers_apiKey')}
                         {/* Show asterisk only if required */}
                         {providerConfig.type !== ProviderTypeEnum.CustomOpenAI &&
                         providerConfig.type !== ProviderTypeEnum.Ollama
@@ -1244,7 +1376,9 @@ export const ModelSettings = ({ isDarkMode = false }: ModelSettingsProps) => {
                               ? t('options_models_providers_apiKey_placeholder_optional')
                               : providerConfig.type === ProviderTypeEnum.Ollama
                                 ? t('options_models_providers_apiKey_placeholder_ollama')
-                                : t('options_models_providers_apiKey_placeholder_required')
+                                : providerConfig.type === ProviderTypeEnum.Bedrock
+                                  ? 'Enter your AWS Access Key ID (e.g., AKIA...)'
+                                  : t('options_models_providers_apiKey_placeholder_required')
                           }
                           value={providerConfig.apiKey || ''}
                           onChange={e => handleApiKeyChange(providerId, e.target.value, providerConfig.baseUrl)}
@@ -1309,12 +1443,238 @@ export const ModelSettings = ({ isDarkMode = false }: ModelSettingsProps) => {
                         </div>
                       )}
 
-                    {/* Base URL input (for custom_openai, ollama, azure_openai, openrouter, and llama) */}
+                    {/* Bedrock-specific help text and fetch button */}
+                    {providerConfig.type === ProviderTypeEnum.Bedrock && (
+                      <div className="ml-20 mt-1 space-y-2">
+                        <p className={`text-xs ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>
+                          Enter your AWS credentials. Select a region to fetch models from.
+                        </p>
+                        {providerConfig.apiKey?.trim() && providerConfig.baseUrl?.trim() && (
+                          <div className="flex items-center gap-2 mt-2">
+                            <select
+                              value={bedrockRegions[providerId] || 'multi-region'}
+                              onChange={e => setBedrockRegions(prev => ({ ...prev, [providerId]: e.target.value }))}
+                              className={`text-xs px-2 py-1 rounded border ${
+                                isDarkMode
+                                  ? 'bg-slate-700 border-slate-600 text-gray-200'
+                                  : 'bg-white border-gray-300 text-gray-700'
+                              }`}>
+                              <option value="multi-region">All Regions (Comprehensive)</option>
+                              <option value="us-west-2">US West 2 (Oregon)</option>
+                              <option value="us-east-1">US East 1 (N. Virginia)</option>
+                              <option value="us-east-2">US East 2 (Ohio)</option>
+                              <option value="eu-west-1">EU West 1 (Ireland)</option>
+                              <option value="eu-central-1">EU Central 1 (Frankfurt)</option>
+                              <option value="ap-northeast-1">Asia Pacific (Tokyo)</option>
+                              <option value="ap-southeast-1">Asia Pacific (Singapore)</option>
+                              <option value="ap-southeast-2">Asia Pacific (Sydney)</option>
+                            </select>
+                          </div>
+                        )}
+                        {providerConfig.apiKey?.trim() && providerConfig.baseUrl?.trim() && (
+                          <div className="mt-2 space-y-2">
+                            <p className={`text-xs font-medium ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+                              Model Filters (Optional)
+                            </p>
+                            <div className="grid grid-cols-2 gap-2">
+                              <div>
+                                <label className={`text-xs ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>
+                                  Provider
+                                </label>
+                                <select
+                                  value={bedrockFilters[providerId]?.provider || ''}
+                                  onChange={e =>
+                                    setBedrockFilters(prev => ({
+                                      ...prev,
+                                      [providerId]: { ...prev[providerId], provider: e.target.value || undefined },
+                                    }))
+                                  }
+                                  className={`w-full text-xs px-2 py-1 rounded border ${
+                                    isDarkMode
+                                      ? 'bg-slate-700 border-slate-600 text-gray-200'
+                                      : 'bg-white border-gray-300 text-gray-700'
+                                  }`}>
+                                  <option value="">All Providers</option>
+                                  <option value="anthropic">Anthropic</option>
+                                  <option value="amazon">Amazon</option>
+                                  <option value="cohere">Cohere</option>
+                                  <option value="ai21">AI21 Labs</option>
+                                  <option value="meta">Meta</option>
+                                  <option value="mistral">Mistral AI</option>
+                                  <option value="stability">Stability AI</option>
+                                </select>
+                              </div>
+                              <div>
+                                <label className={`text-xs ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>
+                                  Output Type
+                                </label>
+                                <select
+                                  value={bedrockFilters[providerId]?.outputModality || ''}
+                                  onChange={e =>
+                                    setBedrockFilters(prev => ({
+                                      ...prev,
+                                      [providerId]: {
+                                        ...prev[providerId],
+                                        outputModality: e.target.value || undefined,
+                                      },
+                                    }))
+                                  }
+                                  className={`w-full text-xs px-2 py-1 rounded border ${
+                                    isDarkMode
+                                      ? 'bg-slate-700 border-slate-600 text-gray-200'
+                                      : 'bg-white border-gray-300 text-gray-700'
+                                  }`}>
+                                  <option value="">All Types</option>
+                                  <option value="TEXT">Text</option>
+                                  <option value="IMAGE">Image</option>
+                                  <option value="EMBEDDING">Embedding</option>
+                                </select>
+                              </div>
+                              <div>
+                                <label className={`text-xs ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>
+                                  Inference Type
+                                </label>
+                                <select
+                                  value={bedrockFilters[providerId]?.inferenceType || ''}
+                                  onChange={e =>
+                                    setBedrockFilters(prev => ({
+                                      ...prev,
+                                      [providerId]: { ...prev[providerId], inferenceType: e.target.value || undefined },
+                                    }))
+                                  }
+                                  className={`w-full text-xs px-2 py-1 rounded border ${
+                                    isDarkMode
+                                      ? 'bg-slate-700 border-slate-600 text-gray-200'
+                                      : 'bg-white border-gray-300 text-gray-700'
+                                  }`}>
+                                  <option value="">All Types</option>
+                                  <option value="ON_DEMAND">On-Demand</option>
+                                  <option value="PROVISIONED">Provisioned</option>
+                                </select>
+                              </div>
+                              <div>
+                                <label className={`text-xs ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>
+                                  Customization
+                                </label>
+                                <select
+                                  value={bedrockFilters[providerId]?.customizationType || ''}
+                                  onChange={e =>
+                                    setBedrockFilters(prev => ({
+                                      ...prev,
+                                      [providerId]: {
+                                        ...prev[providerId],
+                                        customizationType: e.target.value || undefined,
+                                      },
+                                    }))
+                                  }
+                                  className={`w-full text-xs px-2 py-1 rounded border ${
+                                    isDarkMode
+                                      ? 'bg-slate-700 border-slate-600 text-gray-200'
+                                      : 'bg-white border-gray-300 text-gray-700'
+                                  }`}>
+                                  <option value="">All Types</option>
+                                  <option value="FINE_TUNING">Fine Tuning</option>
+                                  <option value="CONTINUED_PRE_TRAINING">Continued Pre-training</option>
+                                  <option value="DISTILLATION">Distillation</option>
+                                </select>
+                              </div>
+                            </div>
+                          </div>
+                        )}
+                        {providerConfig.apiKey?.trim() && providerConfig.baseUrl?.trim() && (
+                          <div className="flex items-center gap-2 mt-2">
+                            <button
+                              type="button"
+                              onClick={() => fetchBedrockModels(providerId)}
+                              disabled={loadingBedrockModels[providerId]}
+                              className={`inline-flex items-center px-3 py-1 text-xs font-medium rounded-md ${
+                                isDarkMode
+                                  ? 'bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 text-white'
+                                  : 'bg-blue-500 hover:bg-blue-600 disabled:bg-gray-400 text-white'
+                              } disabled:cursor-not-allowed transition-colors`}>
+                              {loadingBedrockModels[providerId] ? (
+                                <>
+                                  <svg
+                                    className="animate-spin -ml-1 mr-2 h-3 w-3 text-white"
+                                    xmlns="http://www.w3.org/2000/svg"
+                                    fill="none"
+                                    viewBox="0 0 24 24">
+                                    <circle
+                                      className="opacity-25"
+                                      cx="12"
+                                      cy="12"
+                                      r="10"
+                                      stroke="currentColor"
+                                      strokeWidth="4"></circle>
+                                    <path
+                                      className="opacity-75"
+                                      fill="currentColor"
+                                      d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                  </svg>
+                                  Fetching...
+                                </>
+                              ) : (
+                                'Fetch Available Models'
+                              )}
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => generateBedrockProvisioning(providerId)}
+                              disabled={generatingProvisioningFiles[providerId]}
+                              className={`inline-flex items-center px-3 py-1 text-xs font-medium rounded-md ${
+                                isDarkMode
+                                  ? 'bg-green-600 hover:bg-green-700 disabled:bg-gray-600 text-white'
+                                  : 'bg-green-500 hover:bg-green-600 disabled:bg-gray-400 text-white'
+                              } disabled:cursor-not-allowed transition-colors`}
+                              title="Generate scripts to automatically request access for missing Claude 4.5 and other models">
+                              {generatingProvisioningFiles[providerId] ? (
+                                <>
+                                  <svg
+                                    className="animate-spin -ml-1 mr-2 h-3 w-3 text-white"
+                                    xmlns="http://www.w3.org/2000/svg"
+                                    fill="none"
+                                    viewBox="0 0 24 24">
+                                    <circle
+                                      className="opacity-25"
+                                      cx="12"
+                                      cy="12"
+                                      r="10"
+                                      stroke="currentColor"
+                                      strokeWidth="4"></circle>
+                                    <path
+                                      className="opacity-75"
+                                      fill="currentColor"
+                                      d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                  </svg>
+                                  Generating...
+                                </>
+                              ) : (
+                                <>
+                                  <svg className="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path
+                                      strokeLinecap="round"
+                                      strokeLinejoin="round"
+                                      strokeWidth={2}
+                                      d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
+                                    />
+                                  </svg>
+                                  Auto-Provision
+                                </>
+                              )}
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Base URL input (for custom_openai, ollama, azure_openai, openrouter, llama, and bedrock) */}
                     {(providerConfig.type === ProviderTypeEnum.CustomOpenAI ||
                       providerConfig.type === ProviderTypeEnum.Ollama ||
                       providerConfig.type === ProviderTypeEnum.AzureOpenAI ||
                       providerConfig.type === ProviderTypeEnum.OpenRouter ||
-                      providerConfig.type === ProviderTypeEnum.Llama) && (
+                      providerConfig.type === ProviderTypeEnum.Llama ||
+                      providerConfig.type === ProviderTypeEnum.Bedrock) && (
                       <div className="flex flex-col">
                         <div className="flex items-center">
                           <label
@@ -1323,11 +1683,14 @@ export const ModelSettings = ({ isDarkMode = false }: ModelSettingsProps) => {
                             {/* Adjust Label based on provider */}
                             {providerConfig.type === ProviderTypeEnum.AzureOpenAI
                               ? t('options_models_providers_endpoint')
-                              : t('options_models_providers_baseUrl')}
+                              : providerConfig.type === ProviderTypeEnum.Bedrock
+                                ? 'Secret Key'
+                                : t('options_models_providers_baseUrl')}
                             {/* Show asterisk only if required */}
                             {/* OpenRouter has a default, so not strictly required, but needed for save button */}
                             {providerConfig.type === ProviderTypeEnum.CustomOpenAI ||
-                            providerConfig.type === ProviderTypeEnum.AzureOpenAI
+                            providerConfig.type === ProviderTypeEnum.AzureOpenAI ||
+                            providerConfig.type === ProviderTypeEnum.Bedrock
                               ? '*'
                               : ''}
                           </label>
@@ -1343,7 +1706,9 @@ export const ModelSettings = ({ isDarkMode = false }: ModelSettingsProps) => {
                                     ? t('options_models_providers_placeholders_baseUrl_openrouter')
                                     : providerConfig.type === ProviderTypeEnum.Llama
                                       ? t('options_models_providers_placeholders_baseUrl_llama')
-                                      : t('options_models_providers_placeholders_baseUrl_ollama')
+                                      : providerConfig.type === ProviderTypeEnum.Bedrock
+                                        ? 'Enter your AWS Secret Access Key'
+                                        : t('options_models_providers_placeholders_baseUrl_ollama')
                             }
                             value={providerConfig.baseUrl || ''}
                             onChange={e => handleApiKeyChange(providerId, providerConfig.apiKey || '', e.target.value)}
